@@ -19,7 +19,7 @@
     .nav button:hover { border-color:var(--muted); }
     #month { min-width:150px; text-align:center; font-weight:500; }
     .wrap { overflow-x:auto; }
-    table { width:100%; border-collapse:collapse; min-width:760px; table-layout:fixed; }
+    table { width:100%; border-collapse:collapse; min-width:820px; table-layout:fixed; }
     th, td { border-bottom:1px solid var(--line); padding:12px 10px; text-align:left; vertical-align:top; }
     thead th { font-weight:500; font-size:13px; color:var(--muted); }
     thead th small { display:block; font-weight:400; font-size:12px; }
@@ -75,55 +75,58 @@
     ];
     // ───────────────────────────────────────────────────────────
 
-    const WEEKS = [[1, 7], [8, 14], [15, 21], [22, 31]]; // week 4 runs to month end
     const CONNECTED = API_URL.startsWith('https://');
     const today = new Date();
-    let view = new Date(today.getFullYear(), today.getMonth(), 1);
+    let view = new Date(today.getFullYear(), today.getMonth(), 1); // the month on screen
+    let weeks = [];  // the Monday–Sunday weeks of that month, each an array of 7 Dates
     let events = []; // { id, date: 'YYYY-MM-DD', pole, text }
 
     const $ = id => document.getElementById(id);
     const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
     const pad = n => String(n).padStart(2, '0');
-    const monthKey = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
-    const weekOf = day => Math.min(Math.ceil(day / 7), 4);
-    const dayLabel = day => new Date(view.getFullYear(), view.getMonth(), day)
-      .toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' });
+    const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const fromIso = s => new Date(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));
+    const dayLabel = d => d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric' });
+    const shortDate = d => d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
     const status = (msg, warn) => { $('status').textContent = msg; $('status').className = warn ? 'warn' : ''; };
 
-    function daysOfWeek(w) {
-      const lastDay = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
-      const [a, b] = WEEKS[w - 1];
+    // A week belongs to the month that contains its Thursday (European convention),
+    // so every month has 4 or 5 weeks and no week appears in two months.
+    function weeksOfMonth(y, m) {
+      const first = new Date(y, m, 1);
+      const firstThursday = 1 + ((4 - first.getDay() + 7) % 7);
       const out = [];
-      for (let d = a; d <= Math.min(b, lastDay); d++) out.push(d);
+      for (let thu = firstThursday; new Date(y, m, thu).getMonth() === m; thu += 7) {
+        out.push(Array.from({ length: 7 }, (_, i) => new Date(y, m, thu - 3 + i)));
+      }
       return out;
     }
 
     function render() {
-      const y = view.getFullYear(), m = view.getMonth(), mk = monthKey(view);
-      const lastDay = new Date(y, m + 1, 0).getDate();
-      const short = view.toLocaleDateString('en-GB', { month: 'short' });
+      weeks = weeksOfMonth(view.getFullYear(), view.getMonth());
       $('month').textContent = view.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
 
-      const isThisMonth = y === today.getFullYear() && m === today.getMonth();
-      const nowWeek = isThisMonth ? weekOf(today.getDate()) : 0;
-      const cls = w => (w === nowWeek ? ' class="now"' : '');
+      const todayIso = iso(today);
+      const nowWeek = weeks.findIndex(w => w.some(d => iso(d) === todayIso));
+      const cls = i => (i === nowWeek ? ' class="now"' : '');
 
       let html = '<thead><tr><th></th>';
-      WEEKS.forEach(([a, b], i) => {
-        html += `<th${cls(i + 1)}>Week ${i + 1}<small>${a}–${Math.min(b, lastDay)} ${short}</small></th>`;
+      weeks.forEach((w, i) => {
+        html += `<th${cls(i)}>Week ${i + 1}<small>${shortDate(w[0])} – ${shortDate(w[6])}</small></th>`;
       });
       html += '</tr></thead><tbody>';
 
       POLES.forEach(pole => {
         html += `<tr><th>${esc(pole)}</th>`;
-        for (let w = 1; w <= 4; w++) {
+        weeks.forEach((w, i) => {
+          const from = iso(w[0]), to = iso(w[6]);
           const items = events
-            .filter(e => e.date.slice(0, 7) === mk && e.pole === pole && weekOf(+e.date.slice(8)) === w)
+            .filter(e => e.pole === pole && e.date >= from && e.date <= to)
             .sort((a, b) => a.date.localeCompare(b.date));
-          html += `<td${cls(w)} data-pole="${esc(pole)}" data-week="${w}"><ul>` +
-            items.map(e => `<li data-i="${events.indexOf(e)}"><span class="day">${dayLabel(+e.date.slice(8))}</span>${esc(e.text)}</li>`).join('') +
+          html += `<td${cls(i)} data-pole="${esc(pole)}" data-week="${i}"><ul>` +
+            items.map(e => `<li data-i="${events.indexOf(e)}"><span class="day">${dayLabel(fromIso(e.date))}</span>${esc(e.text)}</li>`).join('') +
             `</ul><button class="add">+ Add</button></td>`;
-        }
+        });
         html += '</tr>';
       });
       $('grid').innerHTML = html + '</tbody>';
@@ -131,9 +134,9 @@
 
     // Day picker + text field. Enter or clicking elsewhere saves, Esc cancels.
     let closeEditor = null;
-    function openEditor(container, days, day, text, onSave) {
+    function openEditor(container, days, date, text, onSave) {
       container.innerHTML = '<div class="editor"><select aria-label="Day">' +
-        days.map(d => `<option value="${d}"${d === day ? ' selected' : ''}>${dayLabel(d)}</option>`).join('') +
+        days.map(d => `<option value="${iso(d)}"${iso(d) === date ? ' selected' : ''}>${dayLabel(d)}</option>`).join('') +
         '</select><input aria-label="Event" placeholder="e.g. Movie night, 20h"></div>';
       const ed = container.firstChild, sel = ed.querySelector('select'), input = ed.querySelector('input');
       input.value = text;
@@ -145,7 +148,7 @@
         done = true;
         closeEditor = null;
         document.removeEventListener('pointerdown', outside, true);
-        save ? onSave(+sel.value, input.value.trim()) : render();
+        save ? onSave(sel.value, input.value.trim()) : render();
       };
       const outside = e => { if (!ed.contains(e.target)) finish(true); };
       document.addEventListener('pointerdown', outside, true);
@@ -163,38 +166,36 @@
       if (li && li.querySelector('.editor')) return;
       if (closeEditor) closeEditor(true);
 
-      const mk = monthKey(view);
+      const days = weeks[+(li || addBtn).closest('td').dataset.week];
       if (li) {
         const ev = events[+li.dataset.i];
-        const day = +ev.date.slice(8);
-        openEditor(li, daysOfWeek(weekOf(day)), day, ev.text, (newDay, text) => {
-          if (text === ev.text && newDay === day) return render();
+        openEditor(li, days, ev.date, ev.text, (date, text) => {
+          if (text === ev.text && date === ev.date) return render();
           if (!text) {
             events.splice(events.indexOf(ev), 1);
             render();
             save({ action: 'delete', id: ev.id });
           } else {
             ev.text = text;
-            ev.date = `${mk}-${pad(newDay)}`;
+            ev.date = date;
             render();
-            save({ action: 'update', id: ev.id, date: ev.date, pole: ev.pole, text });
+            save({ action: 'update', id: ev.id, date, pole: ev.pole, text });
           }
         });
       } else {
         const td = addBtn.closest('td');
-        const w = +td.dataset.week, pole = td.dataset.pole;
-        const days = daysOfWeek(w);
-        const isThisMonth = mk === monthKey(today);
-        const defaultDay = isThisMonth && days.includes(today.getDate()) ? today.getDate() : days[0];
+        const pole = td.dataset.pole;
+        const todayIso = iso(today);
+        const defaultDate = days.some(d => iso(d) === todayIso) ? todayIso : iso(days[0]);
         const li = document.createElement('li');
         td.querySelector('ul').append(li);
         addBtn.remove();
-        openEditor(li, days, defaultDay, '', (day, text) => {
+        openEditor(li, days, defaultDate, '', (date, text) => {
           if (!text) return render();
-          const ev = { id: null, date: `${mk}-${pad(day)}`, pole, text };
+          const ev = { id: null, date, pole, text };
           events.push(ev);
           render();
-          save({ action: 'add', date: ev.date, pole, text }).then(r => { if (r) ev.id = r.id; });
+          save({ action: 'add', date, pole, text }).then(r => { if (r) ev.id = r.id; });
         });
       }
     });
