@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pole Events</title>
+  <style>
+    :root { --bg:#fff; --fg:#111; --muted:#999; --line:#e8e8e8; --now:#f6f6f1; --hover:#f2f2f2; }
+    @media (prefers-color-scheme: dark) {
+      :root { --bg:#111; --fg:#eee; --muted:#6f6f6f; --line:#262626; --now:#1a1a18; --hover:#202020; }
+    }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.5 system-ui, -apple-system, sans-serif; }
+    main { max-width:1000px; margin:0 auto; padding:48px 16px; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:16px; flex-wrap:wrap; margin-bottom:28px; }
+    h1 { font-size:20px; font-weight:600; margin:0; }
+    .nav { display:flex; align-items:center; gap:12px; }
+    .nav button { background:none; border:1px solid var(--line); color:var(--fg); border-radius:6px; width:32px; height:32px; cursor:pointer; font-size:16px; }
+    .nav button:hover { border-color:var(--muted); }
+    #month { min-width:150px; text-align:center; font-weight:500; }
+    .wrap { overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; min-width:680px; table-layout:fixed; }
+    th, td { border-bottom:1px solid var(--line); padding:12px 10px; text-align:left; vertical-align:top; }
+    thead th { font-weight:500; font-size:13px; color:var(--muted); }
+    thead th small { display:block; font-weight:400; font-size:12px; }
+    thead th:first-child, tbody th { width:170px; }
+    tbody th { font-weight:600; }
+    .now { background:var(--now); }
+    ul { margin:0; padding:0; list-style:none; }
+    li { padding:3px 6px; margin:0 -6px 2px; border-radius:4px; cursor:text; overflow-wrap:anywhere; }
+    li:hover { background:var(--hover); }
+    .add { background:none; border:0; padding:3px 0; color:var(--muted); font:inherit; font-size:13px; cursor:pointer; opacity:0; }
+    td:hover .add, .add:focus { opacity:1; }
+    @media (hover:none) { .add { opacity:1; } }
+    input.edit { width:100%; font:inherit; color:var(--fg); background:var(--bg); border:1px solid var(--muted); border-radius:4px; padding:2px 6px; margin:0 -6px; outline:none; }
+    footer { margin-top:24px; font-size:13px; color:var(--muted); display:flex; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+    .warn { color:#c0392b; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>Pole Events</h1>
+      <div class="nav">
+        <button id="prev" aria-label="Previous month">‹</button>
+        <span id="month"></span>
+        <button id="next" aria-label="Next month">›</button>
+      </div>
+    </header>
+
+    <div class="wrap"><table id="grid"></table></div>
+
+    <footer>
+      <span>Click “+ Add” in a cell to add an event. Click an event to edit it, clear its text to delete it.</span>
+      <span id="status"></span>
+    </footer>
+  </main>
+
+  <script>
+    // ── Settings ───────────────────────────────────────────────
+    // Paste the Web app URL from Google Apps Script here (see README).
+    const API_URL = 'https://script.google.com/macros/s/AKfycbyc7oHMWhKHXm3ZnZRQGuM1cPOkB-POGRAhI0slXjaJW8bo68CTjeKKg8JubzinV7pf/exec';
+    const POLES = ['Pole Sport', 'Pole Cinema', 'Pole Environnement', 'Pole Art', 'Pole Bar'];
+    // ───────────────────────────────────────────────────────────
+
+    const WEEKS = [[1, 7], [8, 14], [15, 21], [22, null]]; // week 4 runs to month end
+    const CONNECTED = API_URL.startsWith('https://');
+    const today = new Date();
+    let view = new Date(today.getFullYear(), today.getMonth(), 1);
+    let events = []; // { id, month: 'YYYY-MM', pole, week: 1-4, text }
+
+    const $ = id => document.getElementById(id);
+    const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    const monthKey = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const status = (msg, warn) => { $('status').textContent = msg; $('status').className = warn ? 'warn' : ''; };
+
+    function render() {
+      const y = view.getFullYear(), m = view.getMonth(), mk = monthKey(view);
+      const lastDay = new Date(y, m + 1, 0).getDate();
+      const short = view.toLocaleDateString('en-GB', { month: 'short' });
+      $('month').textContent = view.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+
+      const isThisMonth = y === today.getFullYear() && m === today.getMonth();
+      const nowWeek = isThisMonth ? Math.min(Math.ceil(today.getDate() / 7), 4) : 0;
+      const cls = w => (w === nowWeek ? ' class="now"' : '');
+
+      let html = '<thead><tr><th></th>';
+      WEEKS.forEach(([a, b], i) => {
+        html += `<th${cls(i + 1)}>Week ${i + 1}<small>${a}–${b || lastDay} ${short}</small></th>`;
+      });
+      html += '</tr></thead><tbody>';
+
+      POLES.forEach(pole => {
+        html += `<tr><th>${esc(pole)}</th>`;
+        for (let w = 1; w <= 4; w++) {
+          const items = events.filter(e => e.month === mk && e.pole === pole && e.week === w);
+          html += `<td${cls(w)} data-pole="${esc(pole)}" data-week="${w}"><ul>` +
+            items.map(e => `<li data-i="${events.indexOf(e)}">${esc(e.text)}</li>`).join('') +
+            `</ul><button class="add">+ Add</button></td>`;
+        }
+        html += '</tr>';
+      });
+      $('grid').innerHTML = html + '</tbody>';
+    }
+
+    // Turn a spot in the table into a text field; Enter or click away saves, Esc cancels.
+    function openInput(container, value, onSave) {
+      const input = document.createElement('input');
+      input.className = 'edit';
+      input.value = value;
+      input.placeholder = 'e.g. Thu 12 – Movie night, 20h';
+      container.replaceChildren(input);
+      input.focus();
+      let done = false;
+      const finish = save => {
+        if (done) return;
+        done = true;
+        save ? onSave(input.value.trim()) : render();
+      };
+      input.onkeydown = e => {
+        if (e.key === 'Enter') finish(true);
+        if (e.key === 'Escape') finish(false);
+      };
+      input.onblur = () => finish(true);
+    }
+
+    $('grid').addEventListener('click', e => {
+      const li = e.target.closest('li[data-i]');
+      const addBtn = e.target.closest('.add');
+
+      if (li) {
+        const ev = events[+li.dataset.i];
+        openInput(li, ev.text, text => {
+          if (text === ev.text) return render();
+          if (!text) {
+            events.splice(events.indexOf(ev), 1);
+            render();
+            save({ action: 'delete', id: ev.id });
+          } else {
+            ev.text = text;
+            render();
+            save({ action: 'update', id: ev.id, text });
+          }
+        });
+      } else if (addBtn) {
+        const td = addBtn.closest('td');
+        const li = document.createElement('li');
+        td.querySelector('ul').append(li);
+        addBtn.remove();
+        openInput(li, '', text => {
+          if (!text) return render();
+          const ev = { id: null, month: monthKey(view), pole: td.dataset.pole, week: +td.dataset.week, text };
+          events.push(ev);
+          render();
+          save({ action: 'add', month: ev.month, pole: ev.pole, week: ev.week, text }).then(r => { if (r) ev.id = r.id; });
+        });
+      }
+    });
+
+    // ── Talking to the Google Sheet ────────────────────────────
+    function getCode() { try { return localStorage.getItem('poleCode') || ''; } catch { return ''; } }
+    function setCode(c) { try { localStorage.setItem('poleCode', c); } catch {} }
+
+    async function save(body) {
+      if (!CONNECTED) return { ok: true, id: crypto.randomUUID() }; // demo mode: nothing is stored
+      status('Saving…');
+      try {
+        const res = await fetch(API_URL, { method: 'POST', body: JSON.stringify({ ...body, code: getCode() }) }).then(r => r.json());
+        if (res.error === 'wrong code') {
+          const code = prompt('Enter the editing code:');
+          if (code === null) throw new Error('No code entered');
+          setCode(code.trim());
+          return save(body);
+        }
+        if (res.error) throw new Error(res.error);
+        status('Saved');
+        setTimeout(() => status(''), 1500);
+        return res;
+      } catch (err) {
+        status('Could not save: ' + err.message, true);
+        load();
+      }
+    }
+
+    async function load() {
+      if (!CONNECTED) {
+        status('Demo mode: not connected to a Google Sheet yet, changes are not saved.', true);
+        return render();
+      }
+      try {
+        const res = await fetch(API_URL).then(r => r.json());
+        events = res.events.map(e => ({ ...e, week: +e.week }));
+        render();
+      } catch {
+        status('Could not load events.', true);
+      }
+    }
+
+    $('prev').onclick = () => { view.setMonth(view.getMonth() - 1); render(); };
+    $('next').onclick = () => { view.setMonth(view.getMonth() + 1); render(); };
+
+    render();
+    load();
+  </script>
+</body>
+</html>
